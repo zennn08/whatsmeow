@@ -47,8 +47,9 @@ const (
 	MediaHistory  MediaType = "WhatsApp History Keys"
 	MediaAppState MediaType = "WhatsApp App State Keys"
 
-	MediaStickerPack   MediaType = "WhatsApp Sticker Pack Keys"
-	MediaLinkThumbnail MediaType = "WhatsApp Link Thumbnail Keys"
+	MediaStickerPack          MediaType = "WhatsApp Sticker Pack Keys"
+	MediaThumbnailStickerPack MediaType = "WhatsApp Sticker Pack Thumbnail Keys"
+	MediaLinkThumbnail        MediaType = "WhatsApp Link Thumbnail Keys"
 )
 
 // DownloadableMessage represents a protobuf message that contains attachment info.
@@ -132,8 +133,9 @@ var mediaTypeToMMSType = map[MediaType]string{
 	MediaHistory:  "md-msg-hist",
 	MediaAppState: "md-app-state",
 
-	MediaStickerPack:   "sticker-pack",
-	MediaLinkThumbnail: "thumbnail-link",
+	MediaStickerPack:          "sticker-pack",
+	MediaThumbnailStickerPack: "thumbnail-sticker-pack",
+	MediaLinkThumbnail:        "thumbnail-link",
 }
 
 // DownloadAny loops through the downloadable parts of the given message and downloads the first non-nil item.
