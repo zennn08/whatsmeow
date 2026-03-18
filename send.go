@@ -153,6 +153,10 @@ type SendRequestExtra struct {
 	// When sending media to newsletters, the Handle field returned by the file upload.
 	MediaHandle string
 
+	// Custom list of recipients for broadcast list messages (e.g. StatusBroadcastJID).
+	// If provided, this overrides the default recipient list from status privacy settings.
+	BroadcastListParticipants []types.JID
+
 	Meta *types.MsgMetaInfo
 	// use this only if you know what you are doing
 	AdditionalNodes *[]waBinary.Node
@@ -312,6 +316,8 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 				// Why is this set to PN?
 				extraParams.addressingMode = types.AddressingModePN
 			}
+		} else if len(req.BroadcastListParticipants) > 0 {
+			groupParticipants = req.BroadcastListParticipants
 		} else {
 			groupParticipants, err = cli.getBroadcastListParticipants(ctx, to)
 			if err != nil {
