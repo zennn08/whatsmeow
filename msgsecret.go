@@ -10,7 +10,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
-	"strings"
 	"time"
 
 	"go.mau.fi/util/random"
@@ -102,7 +101,19 @@ func (cli *Client) decryptMsgSecret(ctx context.Context, msg *events.Message, us
 	if err != nil {
 		return nil, err
 	}
-	baseEncKey, storedOrigSender, err := cli.Store.MsgSecrets.GetMessageSecret(ctx, msg.Info.Chat, origSender, origMsgKey.GetID())
+	// GetMessageSecret transparently resolves @lid↔@s.whatsapp.net via
+	// whatsmeow_lid_map and returns whichever sender form the secret was
+	// originally stored under (realSender). We intentionally *do not*
+	// override the caller's origSender with realSender here: the HKDF
+	// context used to derive the symmetric key includes the sender JID
+	// string, and the peer that encrypted the message used the JID form
+	// present on the echoed origMsgKey (i.e. the same form we have in
+	// origSender above). Overriding with a differently-represented
+	// realSender — which happens after chat migration when the secret
+	// was stored pre-migration as @s.whatsapp.net but the vote key
+	// arrives as @lid (or vice-versa) — produces a mismatched HKDF
+	// context and GCM auth fails.
+	baseEncKey, realSender, err := cli.Store.MsgSecrets.GetMessageSecret(ctx, msg.Info.Chat, origSender, origMsgKey.GetID())
 	if err != nil {
 		return nil, fmt.Errorf("failed to get original message secret key: %w", err)
 	}
@@ -112,15 +123,17 @@ func (cli *Client) decryptMsgSecret(ctx context.Context, msg *events.Message, us
 	secretKey, additionalData := generateMsgSecretKey(useCase, msg.Info.Sender, origMsgKey.GetID(), origSender, baseEncKey)
 	plaintext, err := gcmutil.Decrypt(secretKey, encrypted.GetEncIV(), encrypted.GetEncPayload(), additionalData)
 	if err != nil {
-		// Hack for trying both the original sender in the new message and the one who we received the secret key from.
-		// This will hopefully become unnecessary when WhatsApp fully finishes their migration to LIDs.
-		if origSender != storedOrigSender && strings.Contains(err.Error(), "message authentication failed") {
-			secretKey, additionalData = generateMsgSecretKey(useCase, msg.Info.Sender, origMsgKey.GetID(), storedOrigSender, baseEncKey)
-			plaintext, err = gcmutil.Decrypt(secretKey, encrypted.GetEncIV(), encrypted.GetEncPayload(), additionalData)
+		// Fall back to realSender (legacy behaviour) in case the stored
+		// form actually is the one the peer used — e.g. secrets persisted
+		// by an older whatsmeow version that only ever stored the phone
+		// representation.
+		if !realSender.IsEmpty() && realSender != origSender {
+			secretKey2, additionalData2 := generateMsgSecretKey(useCase, msg.Info.Sender, origMsgKey.GetID(), realSender, baseEncKey)
+			if plaintext2, err2 := gcmutil.Decrypt(secretKey2, encrypted.GetEncIV(), encrypted.GetEncPayload(), additionalData2); err2 == nil {
+				return plaintext2, nil
+			}
 		}
-		if err != nil {
-			return nil, fmt.Errorf("failed to decrypt secret message: %w (sender: %s, orig sender: %s and %s)", err, msg.Info.Sender, origSender, storedOrigSender)
-		}
+		return nil, fmt.Errorf("failed to decrypt secret message: %w", err)
 	}
 	return plaintext, nil
 }
