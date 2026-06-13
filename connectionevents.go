@@ -109,8 +109,13 @@ func (cli *Client) handleConnectFailure(ctx context.Context, node *waBinary.Node
 		// By default, expect a disconnect (i.e. prevent auto-reconnect)
 		cli.expectDisconnect()
 		willAutoReconnect = false
-	case reason == events.ConnectFailureServiceUnavailable || reason == events.ConnectFailureInternalServerError:
-		// Auto-reconnect for 503s
+	case reason == events.ConnectFailureServiceUnavailable ||
+		reason == events.ConnectFailureInternalServerError ||
+		reason == events.ConnectFailureMainDeviceGone:
+		// Auto-reconnect for 503s, 500s, and 403s. 403 (MainDeviceGone) is treated
+		// as recoverable instead of a logout: do NOT delete the session, just let
+		// the disconnect surface as events.Disconnected so the app can reconnect
+		// (matches the legacy Baileys behavior of reconnecting on forbidden/403).
 	case reason == events.ConnectFailureCATInvalid || reason == events.ConnectFailureCATExpired:
 		// Auto-reconnect when rotating CAT, lock socket to ensure refresh goes through before reconnect
 		cli.socketLock.RLock()
@@ -123,7 +128,7 @@ func (cli *Client) handleConnectFailure(ctx context.Context, node *waBinary.Node
 			ag.OptionalString("logout_message_subtext"),
 		)
 	}
-	if reason.IsLoggedOut() {
+	if reason.IsLoggedOut() && reason != events.ConnectFailureMainDeviceGone {
 		cli.Log.Infof("Got %s connect failure, sending LoggedOut event and deleting session", reason)
 		go cli.dispatchEvent(&events.LoggedOut{OnConnect: true, Reason: reason})
 		err := cli.Store.Delete(ctx)
