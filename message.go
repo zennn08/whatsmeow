@@ -951,7 +951,7 @@ func (cli *Client) storeHistoricalMessageSecrets(ctx context.Context, conversati
 		} else if chatJID.Server == types.HiddenUserServer {
 			chatPN, _ = cli.Store.LIDs.GetPNForLID(ctx, chatJID)
 		}
-		if !chatPN.IsEmpty() && conv.GetTcToken() != nil {
+		if !chatPN.IsEmpty() && conv.GetTcToken() != nil && isTCTokenStorableUser(chatPN) {
 			privacyTokens = append(privacyTokens, store.PrivacyToken{
 				User:            chatPN,
 				Token:           conv.GetTcToken(),
