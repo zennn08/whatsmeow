@@ -198,3 +198,53 @@ func (cli *Client) issuePrivacyToken(ctx context.Context, jid types.JID, timesta
 		}},
 	})
 }
+
+// shouldIssueTCTokenToLID decides whether a privacy token should be issued to the LID.
+// Issuance prefers the LID when the explicit flag is set OR the account is already
+// LID-migrated; otherwise it prefers the PN.
+func shouldIssueTCTokenToLID(issueToLIDFlag bool, lidMigrationTimestamp int64) bool {
+	return issueToLIDFlag || lidMigrationTimestamp > 0
+}
+
+// isTCTokenStorableUser reports whether a privacy token received for the given JID should
+// be stored. Mirrors baileys' isRegularUser: rejects PSA, bots (incl. MetaAI) and non-user
+// servers. Delegates to the same predicate used for issuing tokens in chat actions.
+func isTCTokenStorableUser(jid types.JID) bool {
+	return shouldSendTCTokenInChatAction(jid)
+}
+
+// resolveTCTokenIssuanceJID returns the JID to put in the <token jid="..."> attribute when
+// issuing a privacy token. Storage keying is unaffected (still by LID via
+// resolveTCTokenStorageLID); this only chooses the wire identifier for the issuance IQ.
+func (cli *Client) resolveTCTokenIssuanceJID(ctx context.Context, jid types.JID) types.JID {
+	issueJID := jid.ToNonAD()
+	if cli.Store == nil || cli.Store.LIDs == nil {
+		return issueJID
+	}
+	if shouldIssueTCTokenToLID(cli.LIDTrustedTokenIssueToLID, cli.Store.LIDMigrationTimestamp) {
+		if issueJID.Server == types.HiddenUserServer {
+			return issueJID
+		}
+		lid, err := cli.Store.LIDs.GetLIDForPN(ctx, issueJID)
+		if err != nil {
+			cli.Log.Debugf("Failed to resolve LID for tctoken issuance JID %s: %v", issueJID, err)
+			return issueJID
+		}
+		if lid.IsEmpty() {
+			return issueJID
+		}
+		return lid.ToNonAD()
+	}
+	if issueJID.Server == types.HiddenUserServer {
+		pn, err := cli.Store.LIDs.GetPNForLID(ctx, issueJID)
+		if err != nil {
+			cli.Log.Debugf("Failed to resolve PN for tctoken issuance JID %s: %v", issueJID, err)
+			return issueJID
+		}
+		if pn.IsEmpty() {
+			return issueJID
+		}
+		return pn.ToNonAD()
+	}
+	return issueJID
+}
