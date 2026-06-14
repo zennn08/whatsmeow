@@ -181,6 +181,17 @@ type Client struct {
 	// Should SubscribePresence return an error if no privacy token is stored for the user?
 	ErrorOnSubscribePresenceWithoutToken bool
 
+	// PrivacyTokenOn1to1 controls whether a <tctoken> is attached to outgoing 1:1 messages.
+	// Mirrors baileys AB prop 10518. Default: true.
+	PrivacyTokenOn1to1 bool
+	// ProfilePicPrivacyToken controls whether a <tctoken> is attached to profile picture IQs.
+	// Mirrors baileys AB prop 9666. Default: true.
+	ProfilePicPrivacyToken bool
+	// LIDTrustedTokenIssueToLID forces privacy token issuance to the LID even when the account
+	// is not LID-migrated. When false, issuance follows the migration state (LID if migrated,
+	// otherwise PN). Mirrors baileys AB prop 14303. Default: false.
+	LIDTrustedTokenIssueToLID bool
+
 	SendReportingTokens bool
 
 	BackgroundEventCtx context.Context
@@ -279,6 +290,10 @@ func NewClient(deviceStore *store.Device, log waLog.Logger) *Client {
 
 		EnableAutoReconnect: true,
 		AutoTrustIdentity:   true,
+
+		PrivacyTokenOn1to1:     true,
+		ProfilePicPrivacyToken: true,
+		// LIDTrustedTokenIssueToLID defaults to false (zero value).
 
 		BackgroundEventCtx: context.Background(),
 	}
