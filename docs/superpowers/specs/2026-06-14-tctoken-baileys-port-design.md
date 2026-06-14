@@ -103,16 +103,38 @@ Tambah helper di `tctoken.go`:
 
 ```go
 // resolveTCTokenIssuanceJID returns the JID to put in the <token jid="..."> attribute
-// when issuing a privacy token. When LIDTrustedTokenIssueToLID is true, prefer the LID;
-// otherwise prefer the PN. Falls back to the input JID if mapping is unavailable.
+// when issuing a privacy token. Issuance prefers the LID when either the
+// LIDTrustedTokenIssueToLID flag is set OR the account is already LID-migrated
+// (Store.LIDMigrationTimestamp > 0); otherwise it prefers the PN. Falls back to the
+// input JID if the required mapping is unavailable.
 func (cli *Client) resolveTCTokenIssuanceJID(ctx context.Context, jid types.JID) types.JID
 ```
 
-Aturan:
-- `LIDTrustedTokenIssueToLID == true`: jika input PN → resolve ke LID (`Store.LIDs.GetLIDForPN`);
+**Keputusan "issue ke LID" bersifat migration-aware:**
+
+```go
+issueToLID := cli.LIDTrustedTokenIssueToLID || cli.Store.LIDMigrationTimestamp > 0
+```
+
+Alasan: saat `Store.LIDMigrationTimestamp > 0`, whatsmeow memaksa tujuan pesan PN→LID
+(`send.go:331`), sehingga seluruh stanza dikirim sebagai LID. Jika token tetap di-issue ke
+PN, terjadi inkonsistensi (kontak diperlakukan LID di mana-mana kecuali issuance). Dengan
+menjadikan keputusan migration-aware, issuance mengikuti addressing pesan yang sebenarnya.
+baileys tidak punya konsep forced-LID-migration per-akun, jadi default statisnya (`false` → PN)
+tidak cukup untuk whatsmeow.
+
+Aturan resolusi:
+- `issueToLID == true`: jika input PN → resolve ke LID (`Store.LIDs.GetLIDForPN`);
   jika sudah LID → pakai apa adanya. Fallback ke input jika mapping kosong.
-- `LIDTrustedTokenIssueToLID == false` (default): jika input LID → resolve ke PN
+- `issueToLID == false`: jika input LID → resolve ke PN
   (`Store.LIDs.GetPNForLID`); jika sudah PN → pakai apa adanya. Fallback ke input jika mapping kosong.
+
+Matriks hasil:
+| Kondisi | Hasil issuance JID |
+|---|---|
+| Belum migrasi, flag `false` (default) | **PN** (parity baileys) |
+| Sudah migrasi (`LIDMigrationTimestamp > 0`) | **LID** (konsisten dgn tujuan pesan) |
+| Flag `true` (override eksplisit) | **LID** |
 
 Perubahan `issuePrivacyToken` / `issuePrivacyTokenAndSave`:
 - **Storage & lookup** tetap memakai LID (`resolveTCTokenStorageLID`) — tidak berubah.
@@ -121,7 +143,8 @@ Perubahan `issuePrivacyToken` / `issuePrivacyTokenAndSave`:
   `issuePrivacyTokenAndSave` menghitung `issuanceJID` lalu meneruskannya ke `issuePrivacyToken`.
 
 **Perubahan perilaku default (disengaja):** saat ini whatsmeow selalu issue ke LID
-(`storageJID` = LID). Dengan default flag `false`, issuance kini ke **PN**, sesuai default baileys.
+(`storageJID` = LID). Setelah perubahan: akun yang **belum** migrasi akan issue ke **PN**
+(sesuai default baileys), sedangkan akun yang **sudah** migrasi tetap issue ke **LID**.
 
 ### E. Filter "regular user" saat menyimpan token
 
@@ -142,8 +165,9 @@ demi kejelasan maksud):
 Table-test untuk logika murni / mudah di-mock:
 - `isTCTokenStorableUser` / `shouldSendTCTokenInChatAction`: kasus PSA (`0`), bot (`13135550xxx`),
   MetaAI, user normal PN, user LID, server lain.
-- `resolveTCTokenIssuanceJID`: matriks flag on/off × ada/tidak ada mapping LID↔PN, dengan mock
-  `Store.LIDs`.
+- `resolveTCTokenIssuanceJID`: matriks (flag on/off) × (`LIDMigrationTimestamp` >0 / =0) ×
+  (ada/tidak ada mapping LID↔PN), dengan mock `Store.LIDs`. Pastikan: belum-migrasi+flag-off → PN;
+  sudah-migrasi → LID; flag-on → LID.
 - Bila perlu, ekstrak keputusan gate ke fungsi kecil agar bisa diuji tanpa koneksi nyata.
 
 ## Ringkasan File yang Disentuh
@@ -160,8 +184,10 @@ Table-test untuk logika murni / mudah di-mock:
 
 ## Risiko & Catatan
 
-- **Perubahan default issuance (LID → PN)** saat `LIDTrustedTokenIssueToLID=false`. Disengaja
-  agar selaras baileys; pengguna yang ingin perilaku lama set flag ke `true`.
+- **Perubahan default issuance** bersifat migration-aware: akun **belum** migrasi + flag `false`
+  kini issue ke **PN** (selaras baileys); akun **sudah** migrasi (`LIDMigrationTimestamp > 0`) tetap
+  issue ke **LID** (konsisten dengan tujuan pesan yang dipaksa LID di `send.go:331`). Pengguna yang
+  ingin selalu LID dapat set `LIDTrustedTokenIssueToLID=true`.
 - Gate default `true` untuk `PrivacyTokenOn1to1` & `ProfilePicPrivacyToken` menjaga perilaku
   attach tetap seperti sekarang; hanya menambah kemampuan mematikannya.
 - Tidak ada migrasi DB (skema tidak berubah).
