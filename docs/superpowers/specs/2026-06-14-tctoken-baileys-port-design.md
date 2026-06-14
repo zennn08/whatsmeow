@@ -191,3 +191,33 @@ Table-test untuk logika murni / mudah di-mock:
 - Gate default `true` untuk `PrivacyTokenOn1to1` & `ProfilePicPrivacyToken` menjaga perilaku
   attach tetap seperti sekarang; hanya menambah kemampuan mematikannya.
 - Tidak ada migrasi DB (skema tidak berubah).
+
+## Migrasi & Kompatibilitas Mundur
+
+Sasaran: aman diterapkan pada session yang **sudah jalan** dengan tabel
+`whatsmeow_privacy_tokens` yang **sudah terisi**. Tidak ada migrasi DB, rewrite, maupun delete.
+
+| Perubahan | Dampak ke data existing | Aman? |
+|---|---|---|
+| 3 config flag di `Client` | Murni in-memory; default di `NewClient`. Tidak ada kolom/tabel baru | ✅ |
+| Gate `<tctoken>` 1:1 (default `true`) | Tidak ada — perilaku attach sama | ✅ |
+| Gate foto profil (default `true`) | Tidak ada — perilaku attach sama | ✅ |
+| `resolveTCTokenIssuanceJID` migration-aware | Keying storage tetap by LID; hanya ubah attr `<token jid>` di IQ runtime | ✅ |
+| Filter storable-user saat simpan | Hanya menyaring **write baru**; baris lama tidak disentuh/dihapus | ✅ |
+
+**Invariannya:**
+
+1. **Tidak ada file upgrade SQL baru / `ALTER TABLE` / bump versi skema.** Tabel
+   `whatsmeow_privacy_tokens` (termasuk kolom `sender_timestamp` dari upgrade V12) tetap apa adanya.
+2. **Keying penyimpanan tidak berubah.** Baris lama — tersimpan by LID maupun by PN (untuk yang dulu
+   belum punya mapping) — tetap ketemu, karena `GetPrivacyToken` punya `CASE` cross-lookup PN↔LID via
+   `whatsmeow_lid_map`. Data lama tetap terbaca tanpa perubahan.
+3. **Filter hanya gate write, bukan read/delete.** Baris "tidak valid" yang terlanjur tersimpan tetap
+   dibaca & di-attach seperti sebelumnya — tanpa penghapusan retroaktif.
+4. **Default flag (`true/true/false`) menjaga perilaku lama** untuk attach; hanya menambah opsi setel.
+
+**Satu perubahan perilaku (bukan bahaya data):** untuk akun yang **belum** migrasi LID, issuance
+default bergeser **LID → PN** di tengah session berjalan. Disengaja (selaras baileys), tidak merusak
+data (paling banter terbit token tambahan ke PN; token yang sudah tersimpan tak terpengaruh karena
+jalur berbeda). Untuk rollout dengan **nol** perubahan perilaku, set `LIDTrustedTokenIssueToLID=true`
+agar tetap "selalu issue ke LID" seperti sekarang.
