@@ -303,6 +303,10 @@ func (cli *Client) handlePrivacyTokenNotification(ctx context.Context, node *waB
 		cli.Log.Warnf("privacy_token notification didn't have a sender (%v)", parentAG.Error())
 		return
 	}
+	if !isTCTokenStorableUser(senderLID) {
+		cli.Log.Debugf("Ignoring privacy token notification from non-storable user %s", senderLID)
+		return
+	}
 	for _, child := range tokens.GetChildren() {
 		ag := child.AttrGetter()
 		if child.Tag != "token" {
