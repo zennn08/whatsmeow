@@ -877,7 +877,7 @@ func (cli *Client) sendDM(
 	if tcErr != nil {
 		cli.Log.Warnf("Failed to get privacy token for %s: %v", to, tcErr)
 	}
-	if len(tcTokenBytes) > 0 {
+	if cli.PrivacyTokenOn1to1 && len(tcTokenBytes) > 0 {
 		node.Content = append(node.GetChildren(), waBinary.Node{
 			Tag:     "tctoken",
 			Content: tcTokenBytes,
@@ -896,9 +896,11 @@ func (cli *Client) sendDM(
 		return "", nil, fmt.Errorf("failed to send message node: %w", err)
 	}
 
-	storageJID := cli.resolveTCTokenStorageLID(ctx, to)
-	if shouldSendTCTokenInChatAction(to) && shouldSendNewTCToken(cli.getTCTokenSenderTS(storageJID)) {
-		go cli.issuePrivacyTokenAndSave(storageJID, time.Now())
+	if cli.PrivacyTokenOn1to1 {
+		storageJID := cli.resolveTCTokenStorageLID(ctx, to)
+		if shouldSendTCTokenInChatAction(to) && shouldSendNewTCToken(cli.getTCTokenSenderTS(storageJID)) {
+			go cli.issuePrivacyTokenAndSave(storageJID, time.Now())
+		}
 	}
 
 	return phash, data, nil
