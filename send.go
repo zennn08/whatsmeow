@@ -153,6 +153,13 @@ type SendRequestExtra struct {
 	// When sending media to newsletters, the Handle field returned by the file upload.
 	MediaHandle string
 
+	// NewsletterStatus posts the message to a newsletter's status feed using a
+	// <status> node instead of the normal <message> node (which posts to the
+	// timeline). Only meaningful when sending to a NewsletterServer JID that the
+	// bot administrates. The wire frame is otherwise identical to a normal
+	// newsletter message (same type/mediatype attrs and plaintext payload).
+	NewsletterStatus bool
+
 	// Custom list of recipients for broadcast list messages (e.g. StatusBroadcastJID).
 	// If provided, this overrides the default recipient list from status privacy settings.
 	BroadcastListParticipants []types.JID
@@ -409,7 +416,7 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 			phash, data, err = cli.sendDM(ctx, ownID, to, req.ID, message, &resp.DebugTimings, extraParams)
 		}
 	case types.NewsletterServer:
-		data, err = cli.sendNewsletter(ctx, to, req.ID, message, req.MediaHandle, &resp.DebugTimings)
+		data, err = cli.sendNewsletter(ctx, to, req.ID, message, req.MediaHandle, req.NewsletterStatus, &resp.DebugTimings)
 	default:
 		err = fmt.Errorf("%w %s", ErrUnknownServer, to.Server)
 	}
@@ -696,6 +703,7 @@ func (cli *Client) sendNewsletter(
 	id types.MessageID,
 	message *waE2E.Message,
 	mediaID string,
+	asStatus bool,
 	timings *MessageDebugTimings,
 ) ([]byte, error) {
 	attrs := waBinary.Attrs{
@@ -729,8 +737,16 @@ func (cli *Client) sendNewsletter(
 			plaintextNode.Attrs["mediatype"] = mediaType
 		}
 	}
+	nodeTag := "message"
+	if asStatus {
+		// Newsletter statuses are posted with a <status> node instead of
+		// <message>; the server files them into the channel's status feed
+		// rather than the timeline. The attrs and plaintext payload are
+		// identical (type=text|media, mediatype on plaintext).
+		nodeTag = "status"
+	}
 	node := waBinary.Node{
-		Tag:     "message",
+		Tag:     nodeTag,
 		Attrs:   attrs,
 		Content: []waBinary.Node{plaintextNode},
 	}
