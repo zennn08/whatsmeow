@@ -983,6 +983,9 @@ func getMediaTypeFromMessage(msg *waE2E.Message) string {
 		} else {
 			return "video"
 		}
+	case msg.PtvMessage != nil:
+		// PTV (round video note) shares the VideoMessage shape; treat it as video.
+		return "video"
 	case msg.ContactMessage != nil:
 		return "vcard"
 	case msg.ContactsArrayMessage != nil:
