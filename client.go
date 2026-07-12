@@ -108,6 +108,12 @@ type Client struct {
 	ManualHistorySyncDownload       bool
 	DisableManualHistorySyncReceipt bool
 
+	// RawNodeHandler, if set, is called for every raw binary node sent and
+	// received, before normal processing. It mirrors WA Web's transport-level
+	// visibility (used by the WAM telemetry emitter). Keep it fast and
+	// non-blocking; it runs on the send/receive path. Nil by default.
+	RawNodeHandler func(evt RawNodeEvent)
+
 	uploadPreKeysLock sync.Mutex
 	lastPreKeyUpload  time.Time
 
@@ -863,6 +869,14 @@ func (cli *Client) handleFrame(ctx context.Context, data []byte, queue chan *waB
 		return
 	}
 	cli.recvLog.Debugf("%s", node)
+	if cli.RawNodeHandler != nil {
+		_, hasHandler := cli.nodeHandlers[node.Tag]
+		cli.RawNodeHandler(RawNodeEvent{
+			Node:     node,
+			Outgoing: false,
+			Handled:  hasHandler || node.Tag == "ack" || node.Tag == "iq",
+		})
+	}
 	if node.Tag == "xmlstreamend" {
 		if !cli.isExpectedDisconnect() {
 			cli.Log.Warnf("Received stream end frame")
@@ -967,6 +981,9 @@ func (cli *Client) sendNodeAndGetData(ctx context.Context, node waBinary.Node) (
 	}
 
 	cli.sendLog.Debugf("%s", &node)
+	if cli.RawNodeHandler != nil {
+		cli.RawNodeHandler(RawNodeEvent{Node: &node, Outgoing: true, Handled: true})
+	}
 	return payload, sock.SendFrame(ctx, payload)
 }
 
