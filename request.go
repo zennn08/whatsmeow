@@ -108,6 +108,20 @@ type infoQuery struct {
 	NoRetry bool
 }
 
+// Exported aliases so external packages can build an IQ and send it via
+// cli.DangerousInternals().SendIQ (e.g. a WAM/w:stats telemetry uploader that
+// needs the ack). Aliases to the unexported types — identical, not copies — so
+// values pass straight through; the struct fields are already exported.
+type (
+	InfoQuery     = infoQuery
+	InfoQueryType = infoQueryType
+)
+
+const (
+	IQGet InfoQueryType = iqGet
+	IQSet InfoQueryType = iqSet
+)
+
 func (cli *Client) sendIQAsyncAndGetData(ctx context.Context, query *infoQuery) (<-chan *waBinary.Node, []byte, error) {
 	if cli == nil {
 		return nil, nil, ErrClientIsNil
