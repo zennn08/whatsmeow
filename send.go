@@ -1021,49 +1021,6 @@ func getMediaTypeFromMessage(msg *waE2E.Message) string {
 	}
 }
 
-func getButtonTypeFromMessage(msg *waE2E.Message) string {
-	switch {
-	case msg.ViewOnceMessage != nil:
-		return getButtonTypeFromMessage(msg.ViewOnceMessage.Message)
-	case msg.ViewOnceMessageV2 != nil:
-		return getButtonTypeFromMessage(msg.ViewOnceMessageV2.Message)
-	case msg.EphemeralMessage != nil:
-		return getButtonTypeFromMessage(msg.EphemeralMessage.Message)
-	case msg.ButtonsMessage != nil:
-		return "buttons"
-	case msg.ButtonsResponseMessage != nil:
-		return "buttons_response"
-	case msg.ListMessage != nil:
-		return "list"
-	case msg.ListResponseMessage != nil:
-		return "list_response"
-	case msg.InteractiveResponseMessage != nil:
-		return "interactive_response"
-	default:
-		return ""
-	}
-}
-
-func getButtonAttributes(msg *waE2E.Message) waBinary.Attrs {
-	switch {
-	case msg.ViewOnceMessage != nil:
-		return getButtonAttributes(msg.ViewOnceMessage.Message)
-	case msg.ViewOnceMessageV2 != nil:
-		return getButtonAttributes(msg.ViewOnceMessageV2.Message)
-	case msg.EphemeralMessage != nil:
-		return getButtonAttributes(msg.EphemeralMessage.Message)
-	case msg.TemplateMessage != nil:
-		return waBinary.Attrs{}
-	case msg.ListMessage != nil:
-		return waBinary.Attrs{
-			"v":    "2",
-			"type": strings.ToLower(waE2E.ListMessage_ListType_name[int32(msg.ListMessage.GetListType())]),
-		}
-	default:
-		return waBinary.Attrs{}
-	}
-}
-
 const RemoveReactionText = ""
 
 func getEditAttribute(msg *waE2E.Message) types.EditAttribute {
@@ -1182,15 +1139,7 @@ func (cli *Client) getMessageContent(
 		content = append(content, *extraParams.additionalNodes...)
 	}
 
-	// if buttonType := getButtonTypeFromMessage(message); buttonType != "" {
-	// 	content = append(content, waBinary.Node{
-	// 		Tag: "biz",
-	// 		Content: []waBinary.Node{{
-	// 			Tag:   buttonType,
-	// 			Attrs: getButtonAttributes(message),
-	// 		}},
-	// 	})
-	// }
+	// ponytail: <biz> button node sengaja tidak dikirim (fork), lihat commit "fix: remove biz node"
 	return content
 }
 
