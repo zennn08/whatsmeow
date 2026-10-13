@@ -167,9 +167,28 @@ type SendRequestExtra struct {
 	// If provided, this overrides the default recipient list from status privacy settings.
 	BroadcastListParticipants []types.JID
 
+	// GroupWhisperVariants, when set for a group send, keeps the main message as the
+	// skmsg that every member decrypts, while the devices of each variant's Targets
+	// instead receive that variant's Content embedded in their participant
+	// (sender-key distribution) slot. This delivers per-recipient-group content in a
+	// single group message: members in no variant see the skmsg, members in a
+	// variant see that variant (their client favours the slot content over the
+	// skmsg). A device is matched to the FIRST variant whose Targets contain its
+	// non-AD user, so pass Targets in the group's own addressing (LID in a LID
+	// group). Whether a real WhatsApp client renders the slot content is
+	// client-dependent and must be verified on a device.
+	GroupWhisperVariants []GroupWhisperVariant
+
 	Meta *types.MsgMetaInfo
 	// use this only if you know what you are doing
 	AdditionalNodes *[]waBinary.Node
+}
+
+// GroupWhisperVariant pairs a message with the recipients (matched by non-AD
+// user) whose participant slot should carry it. See GroupWhisperVariants.
+type GroupWhisperVariant struct {
+	Content *waE2E.Message
+	Targets []types.JID
 }
 
 // SendMessage sends the given message.
@@ -297,7 +316,7 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 			}
 
 			var participantNodes []waBinary.Node
-			participantNodes, _, err = cli.encryptMessageForDevices(ctx, []types.JID{req.InlineBotJID}, resp.ID, messagePlaintext, nil, waBinary.Attrs{})
+			participantNodes, _, err = cli.encryptMessageForDevices(ctx, []types.JID{req.InlineBotJID}, resp.ID, messagePlaintext, nil, waBinary.Attrs{}, nil)
 			if err != nil {
 				return
 			}
@@ -320,6 +339,18 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 				return
 			}
 			groupParticipants = cachedData.Members
+			for _, v := range req.GroupWhisperVariants {
+				// Per-group whisper: variant content goes to its targets' SKDM
+				// slot; SKDM injected into plaintext later, in sendGroup.
+				targets := make(map[string]bool, len(v.Targets))
+				for _, t := range v.Targets {
+					targets[t.ToNonAD().User] = true
+				}
+				extraParams.whisperVariants = append(extraParams.whisperVariants, whisperVariant{
+					content: v.Content,
+					targets: targets,
+				})
+			}
 			// TODO this is fairly hacky, is there a proper way to determine which identity the message is sent with?
 			if cachedData.AddressingMode == types.AddressingModeLID {
 				ownID = cli.getOwnLID()
@@ -778,6 +809,17 @@ type nodeExtraParams struct {
 	additionalNodes *[]waBinary.Node
 	addressingMode  types.AddressingMode
 	peerRecipientPN types.JID
+	// whisperVariants implements SendRequestExtra.GroupWhisperVariants: each
+	// variant's content goes into the participant (SKDM) slot of its target
+	// devices instead of the shared skmsg. targets is the non-AD user set;
+	// plaintext is the variant content with the SKDM injected, built in sendGroup.
+	whisperVariants []whisperVariant
+}
+
+type whisperVariant struct {
+	content   *waE2E.Message
+	targets   map[string]bool
+	plaintext []byte
 }
 
 func (cli *Client) sendGroup(
@@ -813,6 +855,17 @@ func (cli *Client) sendGroup(
 	skdPlaintext, err := proto.Marshal(skdMessage)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to marshal sender key distribution message to send %s to %s: %w", id, to, err)
+	}
+
+	// Per-group whisper: each variant's target devices get that variant's content
+	// in their SKDM slot (with the SKDM injected so they can still decrypt skmsg).
+	for i := range extraParams.whisperVariants {
+		wc := proto.Clone(extraParams.whisperVariants[i].content).(*waE2E.Message)
+		wc.SenderKeyDistributionMessage = skdMessage.SenderKeyDistributionMessage
+		extraParams.whisperVariants[i].plaintext, err = proto.Marshal(wc)
+		if err != nil {
+			return "", nil, fmt.Errorf("failed to marshal whisper variant to send %s to %s: %w", id, to, err)
+		}
 	}
 
 	cipher := groups.NewGroupCipher(builder, senderKeyName, cli.Store)
@@ -1155,10 +1208,10 @@ func (cli *Client) prepareMessageNode(
 ) (*waBinary.Node, []types.JID, error) {
 	start := time.Now()
 	allDevices, err := cli.GetUserDevices(ctx, participants)
-	timings.GetDevices = time.Since(start)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get device list: %w", err)
 	}
+	timings.GetDevices = time.Since(start)
 
 	if to.Server == types.GroupServer {
 		allDevices = slices.DeleteFunc(allDevices, func(jid types.JID) bool {
@@ -1195,6 +1248,7 @@ func (cli *Client) prepareMessageNode(
 	start = time.Now()
 	participantNodes, includeIdentity, err := cli.encryptMessageForDevices(
 		ctx, allDevices, id, plaintext, dsmPlaintext, encAttrs,
+		extraParams.whisperVariants,
 	)
 	timings.PeerEncrypt = time.Since(start)
 	if err != nil {
@@ -1257,6 +1311,7 @@ func (cli *Client) encryptMessageForDevices(
 	id string,
 	msgPlaintext, dsmPlaintext []byte,
 	encAttrs waBinary.Attrs,
+	whisperVariants []whisperVariant,
 ) ([]waBinary.Node, bool, error) {
 	ownJID := cli.getOwnID()
 	ownLID := cli.getOwnLID()
@@ -1314,6 +1369,14 @@ func (cli *Client) encryptMessageForDevices(
 		}
 		if (jid.User == ownJID.User || jid.User == ownLID.User) && dsmPlaintext != nil {
 			plaintext = dsmPlaintext
+		}
+		// Per-group whisper: if this device is in a variant's targets, its SKDM
+		// slot carries that variant's content instead (first match wins).
+		for _, v := range whisperVariants {
+			if v.plaintext != nil && v.targets[jid.ToNonAD().User] {
+				plaintext = v.plaintext
+				break
+			}
 		}
 		encrypted, isPreKey, err := cli.encryptMessageForDeviceAndWrap(
 			ctx, plaintext, jid, encryptionIdentities[jid], bundles[jid], encAttrs, existingSessions,
