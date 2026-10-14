@@ -179,6 +179,14 @@ type SendRequestExtra struct {
 	// client-dependent and must be verified on a device.
 	GroupWhisperVariants []GroupWhisperVariant
 
+	// GroupParticipants overrides the recipient list for a group message: the
+	// sender-key distribution (SKDM) is fanned out ONLY to these recipients
+	// instead of all members, so members not in the list cannot derive the
+	// sender key for this message. The skmsg is still broadcast by the server, so
+	// excluded members receive the envelope but fail to decrypt it (unless they
+	// already hold a cached sender key — rotate it separately to prevent that).
+	GroupParticipants []types.JID
+
 	Meta *types.MsgMetaInfo
 	// use this only if you know what you are doing
 	AdditionalNodes *[]waBinary.Node
@@ -339,6 +347,10 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 				return
 			}
 			groupParticipants = cachedData.Members
+			if len(req.GroupParticipants) > 0 {
+				// Restricted skmsg: fan out the SKDM only to these recipients.
+				groupParticipants = req.GroupParticipants
+			}
 			for _, v := range req.GroupWhisperVariants {
 				// Per-group whisper: variant content goes to its targets' SKDM
 				// slot; SKDM injected into plaintext later, in sendGroup.
