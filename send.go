@@ -348,8 +348,10 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 			}
 			groupParticipants = cachedData.Members
 			if len(req.GroupParticipants) > 0 {
-				// Restricted skmsg: fan out the SKDM only to these recipients.
+				// Restricted skmsg: fan out the SKDM only to these recipients, and
+				// tell excluded members to hide the undecryptable skmsg.
 				groupParticipants = req.GroupParticipants
+				extraParams.hideDecryptFail = true
 			}
 			for _, v := range req.GroupWhisperVariants {
 				// Per-group whisper: variant content goes to its targets' SKDM
@@ -826,6 +828,9 @@ type nodeExtraParams struct {
 	// devices instead of the shared skmsg. targets is the non-AD user set;
 	// plaintext is the variant content with the SKDM injected, built in sendGroup.
 	whisperVariants []whisperVariant
+	// hideDecryptFail adds decrypt-fail=hide to the skmsg so members who cannot
+	// decrypt it hide the message instead of showing "waiting for this message".
+	hideDecryptFail bool
 }
 
 type whisperVariant struct {
@@ -901,6 +906,9 @@ func (cli *Client) sendGroup(
 		Tag:     "enc",
 		Content: ciphertext,
 		Attrs:   waBinary.Attrs{"v": "2", "type": "skmsg"},
+	}
+	if extraParams.hideDecryptFail {
+		skMsg.Attrs["decrypt-fail"] = string(events.DecryptFailHide)
 	}
 	if mediaType := getMediaTypeFromMessage(message); mediaType != "" {
 		skMsg.Attrs["mediatype"] = mediaType
