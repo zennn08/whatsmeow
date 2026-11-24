@@ -23,6 +23,7 @@ import (
 
 	"github.com/rs/zerolog"
 	"go.mau.fi/libsignal/groups"
+	groupStore "go.mau.fi/libsignal/groups/state/store"
 	"go.mau.fi/libsignal/keys/prekey"
 	"go.mau.fi/libsignal/protocol"
 	"go.mau.fi/libsignal/session"
@@ -184,9 +185,20 @@ type SendRequestExtra struct {
 	// sender-key distribution (SKDM) is fanned out ONLY to these recipients
 	// instead of all members, so members not in the list cannot derive the
 	// sender key for this message. The skmsg is still broadcast by the server, so
-	// excluded members receive the envelope but fail to decrypt it (unless they
-	// already hold a cached sender key — rotate it separately to prevent that).
+	// excluded members receive the envelope but fail to decrypt it and hide it
+	// (decrypt-fail=hide). The message is encrypted with a one-off sender key that
+	// is never stored, so members holding our cached sender key cannot read it
+	// either, and concurrent normal sends never share it.
 	GroupParticipants []types.JID
+	// GroupDeviceMode narrows a GroupParticipants send to some devices of each
+	// recipient: GroupDeviceAll (default), GroupDevicePrimary (device 0, the
+	// phone) or GroupDeviceSecondary (linked devices only). Our own devices are
+	// governed by GroupIncludeOwnDevices instead. Requires GroupParticipants.
+	GroupDeviceMode GroupDeviceMode
+	// GroupIncludeOwnDevices also gives our own other devices (e.g. the phone of
+	// the bot account) the sender key, so they can read a GroupParticipants send.
+	// Without it they hide the message like other excluded members.
+	GroupIncludeOwnDevices bool
 
 	Meta *types.MsgMetaInfo
 	// use this only if you know what you are doing
@@ -194,6 +206,15 @@ type SendRequestExtra struct {
 
 	CheckPermissions bool
 }
+
+// GroupDeviceMode selects which devices of each recipient get a restricted group send.
+type GroupDeviceMode string
+
+const (
+	GroupDeviceAll       GroupDeviceMode = ""
+	GroupDevicePrimary   GroupDeviceMode = "primary"
+	GroupDeviceSecondary GroupDeviceMode = "secondary"
+)
 
 // GroupWhisperVariant pairs a message with the recipients (matched by non-AD
 // user) whose participant slot should carry it. See GroupWhisperVariants.
@@ -356,6 +377,10 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 				// tell excluded members to hide the undecryptable skmsg.
 				groupParticipants = req.GroupParticipants
 				extraParams.hideDecryptFail = true
+				extraParams.deviceMode = req.GroupDeviceMode
+			} else if req.GroupDeviceMode != GroupDeviceAll || req.GroupIncludeOwnDevices {
+				err = fmt.Errorf("GroupDeviceMode and GroupIncludeOwnDevices require GroupParticipants")
+				return
 			}
 			for _, v := range req.GroupWhisperVariants {
 				// Per-group whisper: variant content goes to its targets' SKDM
@@ -377,6 +402,9 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 				ownID = cli.getOwnLID()
 				// Why is this set to PN?
 				extraParams.addressingMode = types.AddressingModePN
+			}
+			if req.GroupIncludeOwnDevices {
+				groupParticipants = append(slices.Clone(groupParticipants), ownID.ToNonAD())
 			}
 		} else if len(req.BroadcastListParticipants) > 0 {
 			groupParticipants = req.BroadcastListParticipants
@@ -841,6 +869,8 @@ type nodeExtraParams struct {
 	// hideDecryptFail adds decrypt-fail=hide to the skmsg so members who cannot
 	// decrypt it hide the message instead of showing "waiting for this message".
 	hideDecryptFail bool
+	// deviceMode implements SendRequestExtra.GroupDeviceMode.
+	deviceMode GroupDeviceMode
 }
 
 type whisperVariant struct {
@@ -867,7 +897,14 @@ func (cli *Client) sendGroup(
 	}
 
 	start = time.Now()
-	builder := groups.NewGroupSessionBuilder(cli.Store, pbSerializer)
+	var skStore groupStore.SenderKey = cli.Store
+	if extraParams.hideDecryptFail {
+		// Restricted send: one-off sender key (fresh keyID/seed/signing key,
+		// iteration 0) that is never persisted. Members holding our cached key
+		// cannot read it, and no concurrent normal send can leak it.
+		skStore = &oneShotSenderKeyStore{}
+	}
+	builder := groups.NewGroupSessionBuilder(skStore, pbSerializer)
 	senderKeyName := protocol.NewSenderKeyName(to.String(), cli.getOwnLID().SignalAddress())
 	signalSKDMessage, err := builder.Create(ctx, senderKeyName)
 	if err != nil {
@@ -895,7 +932,7 @@ func (cli *Client) sendGroup(
 		}
 	}
 
-	cipher := groups.NewGroupCipher(builder, senderKeyName, cli.Store)
+	cipher := groups.NewGroupCipher(builder, senderKeyName, skStore)
 	encrypted, err := cipher.Encrypt(ctx, padMessage(plaintext))
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to encrypt group message to send %s to %s: %w", id, to, err)
@@ -1254,6 +1291,12 @@ func (cli *Client) prepareMessageNode(
 		allDevices = slices.DeleteFunc(allDevices, func(jid types.JID) bool {
 			return jid.Server == types.HostedServer || jid.Server == types.HostedLIDServer
 		})
+		if extraParams.deviceMode != GroupDeviceAll {
+			ownPN, ownLID := cli.getOwnID().User, cli.getOwnLID().User
+			allDevices = slices.DeleteFunc(allDevices, func(jid types.JID) bool {
+				return !keepDevice(extraParams.deviceMode, jid, ownPN, ownLID)
+			})
+		}
 	}
 
 	msgType := getTypeFromMessage(message)
