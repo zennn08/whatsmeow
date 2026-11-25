@@ -1,33 +1,10 @@
 package whatsmeow
 
 import (
-	"context"
 	"testing"
-
-	"go.mau.fi/libsignal/groups"
-	"go.mau.fi/libsignal/protocol"
 
 	"go.mau.fi/whatsmeow/types"
 )
-
-func TestOneShotSenderKeyIsFreshEachSend(t *testing.T) {
-	ctx := context.Background()
-	name := protocol.NewSenderKeyName("123@g.us", types.NewJID("1", types.HiddenUserServer).SignalAddress())
-	keyID := func() uint32 {
-		b := groups.NewGroupSessionBuilder(&oneShotSenderKeyStore{}, pbSerializer)
-		skdm, err := b.Create(ctx, name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if skdm.Iteration() != 0 {
-			t.Fatalf("iteration = %d, want 0", skdm.Iteration())
-		}
-		return skdm.ID()
-	}
-	if first, second := keyID(), keyID(); first == second {
-		t.Fatal("two restricted sends shared a sender key")
-	}
-}
 
 func TestKeepDevice(t *testing.T) {
 	dev := func(user string, d uint16) types.JID {

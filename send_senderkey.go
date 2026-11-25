@@ -15,25 +15,16 @@ import (
 	"go.mau.fi/whatsmeow/types"
 )
 
-// oneShotSenderKeyStore holds a single sender key record in memory for one
-// restricted group send (SendRequestExtra.GroupParticipants). It starts empty,
-// so SessionBuilder.Create generates a fresh keyID/seed/signing key at
-// iteration 0, and it is dropped after the send: the key never reaches the
-// persistent store, so no other send can distribute or reuse it.
-type oneShotSenderKeyStore struct {
-	rec *groupRecord.SenderKey
-}
-
-func (s *oneShotSenderKeyStore) StoreSenderKey(_ context.Context, _ *protocol.SenderKeyName, rec *groupRecord.SenderKey) error {
-	s.rec = rec
-	return nil
-}
-
-func (s *oneShotSenderKeyStore) LoadSenderKey(_ context.Context, _ *protocol.SenderKeyName) (*groupRecord.SenderKey, error) {
-	if s.rec == nil {
-		return groupRecord.NewSenderKey(pbSerializer.SenderKeyRecord, pbSerializer.SenderKeyState), nil
-	}
-	return s.rec, nil
+// ResetGroupSenderKey discards our own sender key for the group, so the NEXT
+// group send (sendGroup → builder.Create) generates and distributes a fresh
+// keyID/seed. Call this before a restricted (GroupParticipants) send.
+//
+// Storing an empty record is enough: LoadSenderKey returns it as IsEmpty(), so
+// Create treats it as absent and regenerates.
+func (cli *Client) ResetGroupSenderKey(ctx context.Context, group types.JID) error {
+	senderKeyName := protocol.NewSenderKeyName(group.String(), cli.getOwnLID().SignalAddress())
+	empty := groupRecord.NewSenderKey(pbSerializer.SenderKeyRecord, pbSerializer.SenderKeyState)
+	return cli.Store.StoreSenderKey(ctx, senderKeyName, empty)
 }
 
 // keepDevice reports whether a restricted group send in the given mode goes to

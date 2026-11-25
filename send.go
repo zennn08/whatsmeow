@@ -23,7 +23,6 @@ import (
 
 	"github.com/rs/zerolog"
 	"go.mau.fi/libsignal/groups"
-	groupStore "go.mau.fi/libsignal/groups/state/store"
 	"go.mau.fi/libsignal/keys/prekey"
 	"go.mau.fi/libsignal/protocol"
 	"go.mau.fi/libsignal/session"
@@ -185,10 +184,8 @@ type SendRequestExtra struct {
 	// sender-key distribution (SKDM) is fanned out ONLY to these recipients
 	// instead of all members, so members not in the list cannot derive the
 	// sender key for this message. The skmsg is still broadcast by the server, so
-	// excluded members receive the envelope but fail to decrypt it and hide it
-	// (decrypt-fail=hide). The message is encrypted with a one-off sender key that
-	// is never stored, so members holding our cached sender key cannot read it
-	// either, and concurrent normal sends never share it.
+	// excluded members receive the envelope but fail to decrypt it (unless they
+	// already hold a cached sender key — rotate it first with ResetGroupSenderKey).
 	GroupParticipants []types.JID
 	// GroupDeviceMode narrows a GroupParticipants send to some devices of each
 	// recipient: GroupDeviceAll (default), GroupDevicePrimary (device 0, the
@@ -901,14 +898,7 @@ func (cli *Client) sendGroup(
 	}
 
 	start = time.Now()
-	var skStore groupStore.SenderKey = cli.Store
-	if extraParams.hideDecryptFail {
-		// Restricted send: one-off sender key (fresh keyID/seed/signing key,
-		// iteration 0) that is never persisted. Members holding our cached key
-		// cannot read it, and no concurrent normal send can leak it.
-		skStore = &oneShotSenderKeyStore{}
-	}
-	builder := groups.NewGroupSessionBuilder(skStore, pbSerializer)
+	builder := groups.NewGroupSessionBuilder(cli.Store, pbSerializer)
 	senderKeyName := protocol.NewSenderKeyName(to.String(), cli.getOwnLID().SignalAddress())
 	signalSKDMessage, err := builder.Create(ctx, senderKeyName)
 	if err != nil {
@@ -936,7 +926,7 @@ func (cli *Client) sendGroup(
 		}
 	}
 
-	cipher := groups.NewGroupCipher(builder, senderKeyName, skStore)
+	cipher := groups.NewGroupCipher(builder, senderKeyName, cli.Store)
 	encrypted, err := cipher.Encrypt(ctx, padMessage(plaintext))
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to encrypt group message to send %s to %s: %w", id, to, err)
