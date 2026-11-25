@@ -296,7 +296,11 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 	}
 
 	isBotMode := isInlineBotMode || to.IsBot()
-	needsMessageSecret := isBotMode || cli.shouldIncludeReportingToken(message)
+	// Restricted and whisper group sends deliver different content to different
+	// devices (and decoys via retry), so one reporting token cannot describe
+	// them: clients that verify it drop the variant they actually decrypt.
+	multiContent := len(req.GroupParticipants) > 0 || len(req.GroupWhisperVariants) > 0
+	needsMessageSecret := isBotMode || (cli.shouldIncludeReportingToken(message) && !multiContent)
 	var extraParams nodeExtraParams
 
 	if needsMessageSecret {
@@ -961,7 +965,8 @@ func (cli *Client) sendGroup(
 		skMsg.Attrs["mediatype"] = mediaType
 	}
 	node.Content = append(node.GetChildren(), skMsg)
-	if cli.shouldIncludeReportingToken(message) && message.GetMessageContextInfo().GetMessageSecret() != nil {
+	multiContent := extraParams.hideDecryptFail || len(extraParams.whisperVariants) > 0
+	if !multiContent && cli.shouldIncludeReportingToken(message) && message.GetMessageContextInfo().GetMessageSecret() != nil {
 		node.Content = append(node.GetChildren(), cli.getMessageReportingToken(plaintext, message, ownID, to, id))
 	}
 
