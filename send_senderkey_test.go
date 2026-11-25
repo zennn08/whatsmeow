@@ -6,6 +6,7 @@ import (
 
 	"go.mau.fi/libsignal/groups"
 	"go.mau.fi/libsignal/protocol"
+
 	"go.mau.fi/whatsmeow/types"
 )
 
@@ -23,13 +24,15 @@ func TestOneShotSenderKeyIsFreshEachSend(t *testing.T) {
 		}
 		return skdm.ID()
 	}
-	if keyID() == keyID() {
+	if first, second := keyID(), keyID(); first == second {
 		t.Fatal("two restricted sends shared a sender key")
 	}
 }
 
 func TestKeepDevice(t *testing.T) {
-	dev := func(user string, d uint16) types.JID { return types.JID{User: user, Server: types.HiddenUserServer, Device: d} }
+	dev := func(user string, d uint16) types.JID {
+		return types.JID{User: user, Server: types.HiddenUserServer, Device: d}
+	}
 	cases := []struct {
 		mode GroupDeviceMode
 		jid  types.JID

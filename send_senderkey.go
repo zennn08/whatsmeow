@@ -11,6 +11,7 @@ import (
 
 	groupRecord "go.mau.fi/libsignal/groups/state/record"
 	"go.mau.fi/libsignal/protocol"
+
 	"go.mau.fi/whatsmeow/types"
 )
 
